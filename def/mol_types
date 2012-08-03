@@ -1,0 +1,25 @@
+  This is the mol_types file for MyGenBank. It is the list copied from the most
+  recent GenBank releas notes. You probably shouldn't edit this file unless
+  GenBank comes out with a new mol_type and this document file lags the latest
+  release. One special mol_type is 'AA', which I have added for nucleotide
+  translations. 
+
+AA
+DNA
+RNA
+ds-RNA
+ds-mRNA
+ds-rRNA
+linear
+mRNA
+ms-DNA
+ms-RNA
+rRNA
+scRNA
+snRNA
+snoRNA
+ss-DNA
+ss-RNA
+ss-snoRNA
+tRNA
+uRNA

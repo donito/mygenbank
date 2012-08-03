@@ -1,0 +1,14 @@
+
+
+Installation:
+
+1. setup environment variables ( source mygenbank.conf )
+2. create directories ( ./setup.directories.sh )
+3. create the database and grant permissions ( ./setup.mysql.sh )
+4. run 'mygb_admin setup'
+5. run 'mygb_admin -t ftp'
+6. run 'mygb_admin -t parse'
+7. run 'mygb_admin -t build'
+8. run 'mygb_admin test'
+9. built indices ( 
+

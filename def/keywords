@@ -1,0 +1,16 @@
+  This is the keywords file for MyGenBank. It is a selection of the GenBank
+  keywords that appear in the KEYWORDS field. Features that will be in
+  MyGenBank start without a leading space, for example this text. You may edit
+  this file as you wish by adding and removing keywords, but do not exceed 63
+  names. If you want to add more keywords, you might consult the keywords.pl
+  script in the arch/ directory.
+
+EST
+HTG
+HTGS_PHASE0
+HTGS_PHASE1
+HTGS_PHASE2
+HTGS_PHASE3
+HTGS_DRAFT
+GSS
+STS

@@ -1,0 +1,609 @@
+#!/usr/bin/perl -w
+
+##############################################
+# Environment variables must be set properly #
+##############################################
+BEGIN {
+	if (not defined $ENV{MYGENBANK_CODE} or
+		not defined $ENV{MYGENBANK_DATA}) {
+		die
+			"Environment variables not set!\n",
+			"Please see the _README_MYGENBANK_ file.\n";
+	}
+	if (not defined $ENV{HOST}) {
+		$ENV{HOST} = `hostname` or
+		$ENV{HOST} = `uname -n` or
+		$ENV{HOST} = "somewhere.com.edu" ;
+		chomp $ENV{HOST} ;
+	}
+}
+
+###############################################################################
+# most Modules
+###############################################################################
+use strict;
+use sigtrap;
+use lib "$ENV{MYGENBANK_CODE}/lib";
+use GBlite;
+# use DataBrowser;
+use Net::FTP;
+use Getopt::Std;
+
+
+###############################################################################
+# Globals
+###############################################################################
+$| = 1; # turn off output buffering
+
+# Directories
+my $CODE       = $ENV{MYGENBANK_CODE};
+my $DATA       = $ENV{MYGENBANK_DATA};
+my $Bin        = "$CODE/bin";
+my $GenBank    = "$DATA/GenBank";
+my $Fasta      = "$DATA/Fasta";
+my $Table      = "$DATA/Table";
+my $Definition = "$DATA/Definition";
+my $DBHOST      = defined $ENV{MYGENBANK_DBHOST} ? $ENV{MYGENBANK_DBHOST} : "db"; # change appropriately
+my $DATABASE    = defined $ENV{MYGENBANK_DB} ? $ENV{MYGENBANK_DB} : "mgb"; # change appropriately
+my $DBUSER      = defined $ENV{MYGENBANK_DBUSER} ? $ENV{MYGENBANK_DBUSER} : "bio"; # change appropriately
+my $host	= $ENV{HOST} ;
+my $pid		= $$ ;
+
+# Options - testing on just the first file
+use vars qw($opt_t);
+getopts('t');
+my $TESTING = $opt_t;
+
+###############################################################################
+# Usage and main
+###############################################################################
+my @command = qw(setup ftp parse build test update);
+my %C = (
+	setup  => \&setup,
+	ftp    => \&ftp,
+	parse  => \&parse,
+	build  => \&build,
+	update => \&update,
+	test   => \&test
+);
+
+sub usage {
+	print STDERR "usage: mygb_admin <command>\n";
+	print STDERR "Commands:\n";
+	foreach my $c (@command) {print STDERR "\t$c\n"}
+	print STDERR "Options:\n",
+		"\t-t  testing mode, will only use 1 file\n";
+	print STDERR "Examples:\n",
+		"\tmygb_admin -t setup ftp parse build test\n",
+		"\tmygb_admin -t update\n",
+		"\tmygb_admin    setup ftp parse build test >& logfile &\n",
+		"\tmygb_admin    update\n";
+	
+	exit(1);
+}
+&usage unless @ARGV;
+foreach my $command (@ARGV) {
+	&usage if not defined $C{$command};
+}
+
+# main
+for my $command (@command) {
+	foreach my $arg (@ARGV) {
+		if ($command eq $arg) { 
+			print "$command :$arg\n";
+			&{$C{$command}} ;
+			last;
+		}
+	}
+}
+exit(0);
+
+
+###############################################################################
+# setup
+#
+# create directories if needed
+# copy Definitions from code/def
+###############################################################################
+sub setup {
+	print "Setting up MyGenBank\n";
+	
+	print "\tCode directory: $CODE\n";
+	print "\tData directory: $DATA\n";
+	
+	# make directories if not already done
+	my @dir = qw(Fasta GenBank Table Definition);
+	foreach my $dir (@dir) {
+		if (-d "$DATA/$dir") {
+			print "\t$DATA/$dir exists\n";
+		}
+		else {
+			print "\tCreating $DATA/$dir\n";
+			system("mkdir $DATA/$dir") == 0 or die $!;
+		}
+	}
+	
+	# copy user-specified definitions from CODE/def to DATA/Definition
+	my @def = qw(keywords features mol_types);
+	foreach my $file (@def) {
+		my %def = getDefinition($file);
+		setDefinition($file, %def);
+	}
+	
+	# create filenames and divisions
+	my %filename;
+	my %division;
+	my $ftp = new Net::FTP("ftp.ncbi.nih.gov");
+	$ftp->login("anonymous", "$ENV{USER}\@$ENV{HOST}");
+	$ftp->binary();
+	$ftp->cwd("genbank");
+	my @file = $ftp->ls;
+	foreach my $file (@file) {
+		next if $file =~ /^gbcon/;
+#		next if $file =~ /^gbest/;
+		next unless $file =~ /(\w+)\.seq\.gz$/;
+		my $name = $1;
+		my ($div) = $name =~ /gb(\w{3})/;
+		die $! unless defined $div;
+		$filename{$name} = 1;
+		$division{$div}  = 1;
+	}
+	setDefinition('filenames', %filename);
+	setDefinition('divisions', %division);
+}
+
+sub setDefinition {
+	my ($file, %stuff) = @_;
+	open(DEF, ">$Definition/$file") or die $!;
+	foreach my $thing (sort keys %stuff) {
+		$thing =~ s/'/_/g; # change single quotes to underscores
+		print DEF "$thing\n";
+	}
+	close DEF;
+}
+
+###############################################################################
+# fetch
+#
+# foreach file in DATA/Defintion/filenames: ftp->gunzip
+###############################################################################
+sub ftp {
+	print "fetching sequences from NCBI and unzipping\n";
+	my @file = `cat $Definition/filenames`;
+	chomp @file;
+	foreach my $file (@file) {
+		if (-e "$GenBank/$file.seq") {
+			print "\t$file.seq exists, skipping\n";
+			last if $TESTING;
+			next;
+		}
+		print "\t$file.seq.gz\n";
+		ftpNCBI($file);
+		last if $TESTING;
+	}
+}
+
+sub ftpNCBI {
+	my ($file, $update) = @_;
+	my $ftp = new Net::FTP("ftp.ncbi.nih.gov");
+	if (not defined $ftp) {warn "FTP error\n"; die $!;}
+	$ftp->login("anonymous", "$ENV{USER}\@$ENV{HOST}") or die $!;
+	$ftp->binary();
+	$ftp->cwd("genbank");
+	$ftp->cwd("daily-nc") if defined $update;
+	open(GZIP, "| gunzip - > $GenBank/$file.seq") or die $!;
+	if (defined $update) {$ftp->get("$file.flat.gz", \*GZIP) or die $! ; } 
+	else                 {$ftp->get("$file.seq.gz",  \*GZIP) or die $! ; } 
+	close GZIP;
+}
+
+###############################################################################
+# parse
+#
+# foreach file in DATA/GenBank parse
+###############################################################################
+sub parse {
+	print "parsing GenBank files and creating Fasta and Table files\n";
+	my @file = `cd $GenBank && ls *.seq`;
+	chomp @file;
+	foreach my $file (@file) {
+		my ($name) = $file =~ /^(\w+)/;
+		
+		if (-e "$Table/$name.mgb") {
+			print "\t$name.mgb exists, skipping\n";
+			last if $TESTING;
+			next;
+		}
+		print "\t$file\n";
+		parseGenBank($name);
+		last if $TESTING;
+	}
+}
+
+sub parseGenBank {
+	my ($file) = @_;
+	
+	# set lookups
+	my %Keyword = getDefinition('keywords');
+	my %Feature = getDefinition('features');
+
+	# do a simple queueing algorithm via NFS
+	# count the number of files with $fasta*
+	my $fasta = "$Fasta/$file.fasta";
+	my @count=<$fasta*>;
+	if (scalar(@count) > 0) {
+		return;
+	}
+
+	# put a hold on $fasta.$host.$pid.tmp
+	my $fastatmp="$fasta.$host.$pid.tmp";
+	system("touch $fastatmp")==0 or die $!;
+
+	# make a hard link to the final file
+	if (! link("$fastatmp", "$fasta")) {
+#	       print "Could not link $filename.  Belonged to some other process.\n";
+		unlink("$fastatmp") or die $!;
+		return;
+	}
+
+	# <this section of code may be unnecessary>
+	# both $basename.mgb* files belong to this process
+	# but check to be sure.  Be wary of NFS.
+	@count=<$fasta*>;
+	if (scalar(@count) != 2) {
+		sleep 20;			    # give NFS some time to resolve
+		@count=<$fasta*>;
+		if (scalar(@count) != 2) {
+			print "Whoa! its bad: $fasta\n";  # something's wrong
+			print join(", ", @count) . "\n";
+			system("ls -la $fasta*");
+			die $!;
+		}
+	}
+
+	# files created
+	my $mgb = "$Table/$file.mgb";
+	my $mgbtmp = "$mgb.$host.$pid.tmp";
+	open(SEQ, ">$fastatmp") or die $!;
+	open(MGB, ">$mgbtmp")   or die $!;
+	
+	# open GenBank file
+	open(GB, "$GenBank/$file.seq") or die "$GenBank/$file.seq not found: $!\n";
+
+	# start parsing
+	my $gb_offset  = 0;
+	my $seq_offset = 0;
+	my $genbank = new GBlite(\*GB);
+
+	while(my $entry = $genbank->nextEntry) {
+		my @MGB_OUTPUT; # store mygenbank output, not all info in for entry
+	
+		# get taxid from the first feature in the feature table
+		my $taxid;
+		if (not defined $entry->features->[0]->qualifiers->{db_xref}) {
+			$taxid = 0;
+		}
+		else {
+			($taxid) = $entry->features->[0]->qualifiers->{db_xref}
+				=~ /taxon:(\d+)/;
+		}
+
+		
+		######################
+		# nucleotide entries #
+		######################
+		
+		# add legal keywords
+		my %kw;
+		foreach my $kw (@{$entry->keywords}) {
+			if (exists $Keyword{$kw}) {
+				$kw{$kw}++;
+			}
+		}
+
+		my $keywords = join(",", keys %kw);
+		$keywords =~ s/'/_/g; # change single quotes to underscores
+	
+		# memorize the table output except for features, which isn't known yet
+		my $locus = [ $entry->accession, $entry->version, $entry->gi,
+			$entry->length, $entry->date, $taxid, $gb_offset, $seq_offset,
+			$file, $entry->mol_type, $entry->division, $keywords];
+
+		# write the fasta
+		my $def = ">gi|" .  $entry->gi . "|gb|" . $entry->accession . 
+			"." . $entry->version . " " . $entry->definition . 
+			" [" . $entry->organism .  "]";
+
+		$def =~ s/\s+/ /g;
+		print SEQ $def, "\n";
+		my $dna = $entry->sequence;
+		for(my $i=0;$i<length($dna);$i+=50) {
+			print SEQ substr($dna, $i, 50), "\n";
+		}
+
+		# set new offsets
+		my $pro_offset = $gb_offset; # need to keep this constant
+		$gb_offset  = tell(GB);
+		$seq_offset = tell(SEQ);
+		
+		if ($gb_offset  == -1) {die $!}
+		if ($seq_offset == -1) {die $!}
+	
+		#################
+		# feature table #
+		#################
+		my %feature; # nucleotide needs to know all features
+		my $species = defined $entry->{organism} ? $entry->{organism} : "" ;
+		foreach my $f (@{$entry->features}) {
+			$feature{$f->key}++ if exists $Feature{$f->key};
+			if ($f->key eq "source") {
+				$species = $f->qualifiers->{organism};
+				$species =~ s/\s+$//;
+			}
+			
+			###################
+			# protein entries #
+			###################
+			if ($f->key eq 'CDS') {
+				my $q = $f->qualifiers;
+				my $aa = $q->{translation};
+				next if not defined $q->{protein_id};
+#				my ($acc, $ver)  = $q->{protein_id} =~ /(\w+)[\._](\d+)/;
+				my ($acc, $ver)  = $q->{protein_id} =~ /(\w+)\.(\d+)/;
+				$ver="" if not defined $ver;
+				$acc=$q->{protein_id} if not defined $acc;
+				
+				my ($gi) = $q->{db_xref} =~ /GI:(\d+)/;
+#				next if not defined $gi;
+				$gi="" if not defined $gi;
+				if (not defined $gi or not defined $acc or not defined $ver) {
+					die "error a:$acc g:$gi v:$ver\n", $q->{protein_id}, "\n", $q->{db_xref}, "\n"
+				} ;
+				delete $q->{translation};
+				delete $q->{protein_id};
+				delete $q->{db_xref};
+		                my $desc = defined ($q->{product}) ? $q->{product}
+               				: defined ($q->{gene}) ? $q->{gene}
+                         		: defined ($q->{name}) ? $q->{name}	# jb 5/25/02, added name
+               				: defined ($q->{note}) ? $q->{note}  # rwc 11/20/02, added note
+					: defined ($f->{definition}) ? $f->{definition}	# rwc 11/07/02, modifiedA definition
+					: "" ;
+				my $def = ">gi|$gi|gb|$acc.$ver $desc [$species] ";
+				$def =~ s/\s+/ /g;
+				
+				# check data, some CDS's don't have sequence...
+				$aa="" if not defined $aa;
+#				next if not defined $aa;
+			
+				# memorize table output
+				push @MGB_OUTPUT, [ $acc, $ver, $gi, length($aa), $entry->date,
+					$taxid, $pro_offset, $seq_offset, $file, "AA",
+					$entry->division];
+
+				# write fasta and set new offset
+				next if ( $aa eq "" );
+				print SEQ $def, "\n";
+				for(my $i=0;$i<length($aa);$i+=50) {
+					print SEQ substr($aa, $i, 50), "\n";
+				}
+				$seq_offset = tell(SEQ);
+			}
+		}
+
+		# although not a feature, add organelle to features, if necessary
+		if (defined $entry->features->[0]->qualifiers->{organelle} and
+			exists $Feature{organelle}) {
+			$feature{organelle}++;
+		}
+
+		# Add features to nucleotide
+		push @$locus, join(",", keys %feature);
+		push @MGB_OUTPUT, $locus; # saving the nucleotide entry
+		
+		# table output
+		foreach my $row (@MGB_OUTPUT) {
+			my $out = join("\t", @$row);
+			$out =~ s/'/_/g; # change single quotes to underscore
+			print MGB $out, "\n";
+		}
+	}
+	close GB;
+	close SEQ;
+	unlink("$fastatmp");
+	close MGB;
+	rename("$mgbtmp", "$mgb");
+}
+
+sub getDefinition {
+	my ($file) = @_;
+	my %H;
+	open(WORDS, "$CODE/def/$file") or die "$CODE/def/$file\n";
+	while(<WORDS>) {
+		next unless /^(\S+)/;
+		$H{$1} = 1;
+	}
+	return %H;
+}
+
+###############################################################################
+# build
+#
+# creates tables and loads mysql with table files
+###############################################################################
+sub build {
+	print "building MyGenBank\n";
+		
+	# enumerate mol_types, divisions, keywords, and features
+	my $mol_types = enumerate("mol_types");
+	my $divisions = enumerate("divisions");
+	my $keywords  = enumerate("keywords");
+	my $features  = enumerate("features");
+	
+	# table creation SQL
+	my $table_definition = "
+
+use $DATABASE
+
+DROP TABLE IF EXISTS MyGenBank;
+
+CREATE TABLE MyGenBank
+(
+accession CHAR(15)   NOT NULL,
+version   INT1 UNSIGNED,
+gi        INT4 UNSIGNED,
+length    INT3 UNSIGNED NOT NULL,
+date      DATE          NOT NULL,
+taxid     INT3 UNSIGNED,
+genbank   INT4 UNSIGNED,
+fasta     INT4 UNSIGNED NOT NULL,
+file      CHAR(10)   NOT NULL,
+mol_type  ENUM($mol_types) NOT NULL,
+division  ENUM($divisions) NOT NULL,
+keywords  SET($keywords),
+features  SET($features),
+
+PRIMARY KEY (accession)
+
+# PRIMARY KEY (accession),
+# INDEX (gi),
+# INDEX (date),
+# INDEX (taxid),
+# INDEX (mol_type),
+# INDEX (division)
+);
+
+";
+
+	if (-e "$Definition/MyGenBank.sql") {
+		print "\tTable definition exists\n";
+	}
+	else {
+		open(SQL, ">$Definition/MyGenBank.sql") or die;
+		print SQL $table_definition;
+		close SQL;
+		open(MYSQL, "| mysql -h $DBHOST -u $DBUSER $DATABASE") or die;
+		print MYSQL $table_definition;
+		close MYSQL; # close between operations to watch status
+	}
+
+	# table loading SQL
+	my $LOAD = "LOAD DATA LOCAL INFILE"; # need LOCAL for some reason
+#	my $LOAD = "LOAD DATA INFILE"; # cannot have LOCAL for some reason on Mac
+	my @file = `cd $Table && ls *.mgb`;
+	chomp @file;
+	foreach my $file (@file) {
+		my ($name) = $file =~ /^(\w+)/;
+		if (-e "$Definition/$name.sql") {
+			print "\t$name.sql exists, skipping\n";
+			last if $TESTING;
+			next;
+		}
+		print "\tbuilding $file\n";
+		open(SQL, ">$Definition/$name.sql") or die;
+		open(MYSQL, "| mysql -h $DBHOST -u $DBUSER  $DATABASE") or die;
+		print SQL   "$LOAD \"$Table/$file\" REPLACE INTO TABLE $DATABASE.MyGenBank;\n";
+		print MYSQL "$LOAD \"$Table/$file\" REPLACE INTO TABLE $DATABASE.MyGenBank;\n";
+		close MYSQL;
+		close SQL;
+		last if $TESTING;
+	}
+}
+
+sub enumerate {
+	my ($file) = @_;
+	my $enum = "\n";
+	open(IN, "$Definition/$file") or die;
+	while(<IN>) {
+		chomp;
+		$enum .= "\t\t'$_',\n";
+	}
+	close IN;
+	chop $enum;
+	chop $enum;
+	return $enum;
+}
+
+###############################################################################
+# update
+###############################################################################
+sub update {
+	print "updating MyGenBank\n";
+
+	my $ftp = new Net::FTP("ftp.ncbi.nih.gov");
+	$ftp->login("anonymous", "$ENV{USER}\@$ENV{HOST}");
+	$ftp->binary();
+	$ftp->cwd("genbank");
+	$ftp->cwd("daily-nc");
+	my @file = $ftp->ls;
+	foreach my $file (@file) {
+#		next unless $file =~ /(\w+)\.flat\.gz$/;
+		next unless $file =~ /(nc\w+)\.flat\.gz$/;
+		my $name = $1;
+		if (-e "$GenBank/$name.seq") {
+			print "\t$name.seq exists, skipping\n";
+		}
+		else {
+			print "\tftp-ing $name\n";
+			ftpNCBI($name, 'update');
+		}
+
+		if (-e "$Table/$name.mgb") {
+			print "\t$name.mgb exists, skipping\n";
+		}
+		else {
+			print "\tparsing $name\n";
+			parseGenBank($name);
+		}
+		
+		if (-e "$Definition/$name.sql") {
+			print "\t$name.sql exists, skipping\n";
+		}
+		else {
+			print "\tbuilding $name\n";
+			buildUpdate($name);
+		}
+		last if $TESTING;
+	}
+}
+
+sub buildUpdate {
+	my ($file) = @_;
+	
+	# open process and a hard copy
+	open(MYSQL, "| mysql -h $DBHOST -u $DBUSER $DATABASE") or die;
+	open(SQL, ">$Definition/$file.sql") or die;
+	
+	# load statement
+	my $LOAD = "LOAD DATA LOCAL INFILE"; # need LOCAL for some reason
+#	my $LOAD = "LOAD DATA INFILE"; # cannot have LOCAL for some reason on Mac
+
+	print SQL   "$LOAD \"$Table/$file.mgb\" REPLACE INTO TABLE $DATABASE.MyGenBank;\n";
+	print MYSQL "$LOAD \"$Table/$file.mgb\" REPLACE INTO TABLE $DATABASE.MyGenBank;\n";
+	close MYSQL;
+	close SQL;
+}
+
+###############################################################################
+# test
+#
+# run a couple of simple querries on the database
+###############################################################################
+sub test {
+	print "Testing MyGenBank with mygb_query\n";
+	my @qtest = (
+		"select COUNT(*) from MyGenBank",
+		"select accession, mol_type, date, taxid from MyGenBank limit 5",
+		"select length, accession from MyGenBank where length < 10 limit 5",
+		"select COUNT(*) from MyGenBank where division='BCT'",
+		"select COUNT(*) from MyGenBank where find_in_set('HTG', keywords)",
+		"select COUNT(*) from MyGenBank where find_in_set('CDS', features)",
+	);
+	foreach my $test (@qtest) {
+		print "\t\"$test\"\n";
+		open(TEST, "$Bin/mygb_query \"$test\" |") or die;
+		while(<TEST>) {print "\t\t$_"}
+		close TEST;
+		
+		last if $TESTING;
+	}
+}

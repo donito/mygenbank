@@ -1,0 +1,531 @@
+<html>
+<head><title>MyGenBank Documenation</title></head>
+<body>
+<h1>MyGenBank Documentation</h1>
+
+<!--
+###############################################################################
+-->
+<b>
+Author: Ian Korf<br>
+Last modified: 2001-07-06<br>
+</b>
+<p>
+
+<a href="#intro">Introduction</a><br>
+<a href="#spec" >Database Specification</a><br>
+<a href="#setup">Setting up MyGenBank</a><br>
+<a href="#query">Querying MyGenBank</a><br>
+
+<a name=intro></a>
+<h2>Introduction</h2>
+
+MyGenBank is a simple package for managing a local copy of GenBank in MySQL.
+Anyone interested in MyGenBank should first read the most recent <a
+href=ftp://ncbi.nlm.nih.gov/genbank/gbrel.txt>GenBank release notes</a> and
+perhaps also see the  <a
+href=http://www.ncbi.nlm.nih.gov/collab/FT>DDJB/EMBL/GenBank Feature table
+defintion</a> and <a
+href=ftp://ncbi.nlm.nih.gov/taxonomy/taxdump.tar.gz>taxonomy definitions</a>
+(see the names.dmp file). MyGenBank consists of two main components:
+
+<ol>
+	<li> the administration tool <b>mygb_admin</b>
+	<li> the querying tools <b>mygb_fetch</b> and <b>mygb_query</b>
+</ol>
+
+<!--
+###############################################################################
+-->
+
+<a name=spec></a>
+<h2>Database Specification</h2>
+
+MyGenBank exists as a single table containing some of the most important
+sequence attributes. However, <em>the sequence is not stored in the
+database</em>. To get the raw sequence, Fasta file, or GenBank flat file, you
+use the <b>mygb_fetch</b> tool (see below).<p>
+
+<table border=1>
+	<tr>
+		<td>Column</td>
+		<td>Type</td>
+		<td>Attributes</td>
+		<td>Indexed</td>
+	</tr>
+	<tr>
+		<td>accession</td>
+		<td>VARCHAR(8)</td>
+		<td>NOT NULL, PRIMARY KEY</td>
+		<td>yes</td>
+	</tr>
+	<tr>
+		<td>version</td>
+		<td>INT1</td>
+		<td>NOT NULL</td>
+		<td>no</td>
+	</tr>
+	<tr>
+		<td>gi</td>
+		<td>INT4</td>
+		<td>NOT NULL, UNIQUE</td>
+		<td>yes</td>
+	</tr>
+	<tr>
+		<td>length</td>
+		<td>INT3</td>
+		<td>NOT NULL,</td>
+		<td>yes</td>
+	</tr>
+	<tr>
+		<td>date</td>
+		<td>DATE</td>
+		<td>NOT NULL</td>
+		<td>yes</td>
+	</tr>
+	<tr>
+		<td>taxid</td>
+		<td>INT3</td>
+		<td>NOT NULL</td>
+		<td>yes</td>
+	</tr>
+	<tr>
+		<td>mol_type</td>
+		<td>ENUM</td>
+		<td>NOT NULL</td>
+		<td>yes</td>
+	</tr>
+	<tr>
+		<td>division</td>
+		<td>ENUM</td>
+		<td>NOT NULL</td>
+		<td>yes</td>
+	</tr>
+	<tr>
+		<td>keywords</td>
+		<td>SET</td>
+		<td></td>
+		<td>no</td>
+	</tr>
+	<tr>
+		<td>features</td>
+		<td>SET</td>
+		<td></td>
+		<td>no</td>
+	</tr>
+	<tr>
+		<td>file</td>
+		<td>VARCHAR(6)</td>
+		<td>NOT_NULL</td>
+		<td>no</td>
+	</tr>
+	<tr>
+		<td>fasta</td>
+		<td>INT4</td>
+		<td>NOT_NULL</td>
+		<td>no</td>
+	</tr>
+		<tr>
+		<td>genbank</td>
+		<td>INT4</td>
+		<td>NOT_NULL</td>
+		<td>no</td>
+	</tr>
+</table>
+
+
+<h4>Enums and Sets</h4>
+
+The division enums are determined during setup. They are stored in the
+$MYGENBANK_DATA/Definition directory. The keywords, features, and mol_types are
+stored in the $MYGENBANK_CODE/def directory and terse copies are made during
+setup and saved to the $MYGENBANK_DATA/Definition directory. You may edit the
+keywords and features files to fit your own criteria, see the directions in
+each of the files in $MYGENBANK_CODE/def. The default keywords, features,
+mol_types, and divisions are given below.
+
+<dl>
+
+<dt><b>mol_type</b> - note that I am including the ds- or ss- in the mol_type
+rather than store a separate value. Also, the CIRCULAR tag is omitted.
+<dd>
+AA
+ds-RNA
+ds-mRNA
+ds-rRNA
+mRNA
+ms-DNA
+ms-RNA
+rRNA
+scRNA
+ss-DNA
+ss-RNA
+tRNA
+uRNA
+
+<dt><b>division</b>
+<dd>
+BCT
+EST
+GSS
+HTG
+INV
+MAM
+PAT
+PHG
+PLN
+PRI
+ROD
+STS
+SYN
+UNA
+VRL
+VRT
+
+<dt><b>keywords</b> - this is my chosen set of keywords (from the KEYWORDS
+field).
+<dd>
+EST
+HTG
+HTGS_PHASE0
+HTGS_PHASE1
+HTGS_PHASE2
+HTGS_PHASE3
+HTGS_DRAFT
+GSS
+STS
+
+<dt><b>features</b> - this is my set of features, not the entire GenBank set.
+There is a maximum of 63 features, which is less than what is present in
+GenBank.
+<dd>
+3_UTR
+3_clip
+5_UTR
+5_clip
+CAAT_signal
+CDS
+GC_signal
+RBS
+STS
+TATA_signal
+conflict
+enhancer
+exon
+gene
+intron
+mRNA
+mat_peptide
+misc_RNA
+misc_binding
+misc_signal
+misc_structure
+modified_base
+polyA_signal
+polyA_site
+precursor_RNA
+prim_transcript
+promoter
+protein_bind
+rRNA
+repeat_region
+satellite
+scRNA
+sig_peptide
+snRNA
+stem_loop
+tRNA
+terminator
+transit_peptide
+transposon
+unsure
+variation
+
+
+
+</dl>
+
+
+<!--
+###############################################################################
+-->
+
+<a name=setup></a>
+<h2>Setting up MyGenBank</h2>
+
+<h4>Environment Variables</h4>
+
+You need to set two envirionment variables. You should probably add these to
+your login scripts.
+
+<dl>
+
+<dt>MYGENBANK_CODE<dd>This should point to the directory where this
+documentation exists. You should find 4 subdirectories here: arch, bin, lib,
+and def.
+
+<dt>MYGENBANK_DATA<dd>This should point to a directory where MyGenBank will
+store its files. Four directories will be created here: Definition, GenBank,
+Fasta, and Table. 
+
+</dl>
+
+<h5>$MYGENBANK_CODE Directory</h5>
+
+<dl>
+
+<dt>arch<dd>An archive of code that is not necessary to run the current
+version of MyGenBank.
+
+<dt>bin<dd>Contains the executable files for MyGenBank. Currently, this
+contains mygb_admin, mygb_fetch, and mygb_query.
+
+<dt>def<dd>Contains the default keywords, features, and mol_types which are
+stored as SET types in MyGenBank. These files may be edited to capture more
+sequence attributes. Keywords are parsed from the GenBank KEYWORD lines and
+features are parsed from the "feature keys" in the feature table. See the <a
+href=http://www.ncbi.nlm.nih.gov/collab/FT>Feature table definition</a> for
+more information.
+
+<dt>lib<dd>Should contain the GBlite.pm perl module that is used for parsing
+GenBank flat files. This module is available from the lib_ikorf collection.
+
+</dl>
+
+<h5>$MYGENBANK_DATA Directory</h5>
+
+<dl>
+
+<dt>Defintion<dd>Contains files for keywords, features, divisions,
+mol_types, and filenames. keywords and features are copied from
+$MYGENBANK_CODE/def.  divisons, mol_types, and filenames are created by
+the "mygb_admin parse"  command. Also contains the *.sql files. The
+MyGenBank.sql file contains the database definition. Other *.sql files
+correspond to the individual GenBank files. 
+
+<dt>Fasta<dd>Contains the Fasta files corresponding to the sequence(s)
+from the GenBank flat file. The files are created by the "mygb_admin
+parse" command. 
+
+<dt>GenBank<dd>Contains GenBank flat files downloaded from the NCBI. The files
+are created by the "mygb_admin ftp" command.
+
+<dt>Table<dd>Contains tab-delimited data for bulk loading into MySQL. The files
+are created by the "mygb_admin parse" command.
+
+
+</dl>
+
+<h4>External Dependencies</h4>
+
+Before you begin, you must have MySQL and Perl installed. You will also need
+the libnet modules (just Net::FTP actually) as well as the MySQL DBI for Perl.
+You can find these components at <a href=http://www.mysql.com>mysql.com</a> and
+<a href=http://www.cpan.org>CPAN</a>.<p>
+
+<h4>Space Requirements</h4>
+
+You're going to need a lot of space. GenBank is continually growing. See
+the release notes to find out how big the flat files are for the latest
+release.  You need to add about 1/3 more than this for the Fasta versions
+of the files.  If you plan on doing incremental updates, you need to take
+this into account too (see growth of GenBank in the release notes). And if
+you want to make BLAST-able databases, you need space for that too. I am
+currently using a single 73 Gb drive for all the files, but this will be
+insufficient by next year.<p>
+
+<h4>mygb_admin</h4>
+
+The mygb_admin tool is used to build MyGenBank. The first time you try building
+MyGenBank, you may wish to use the -t switch to enter testing mode. This will
+process just one GenBank file, which will allow you to determine if your
+environment is set up correctly before wasting a lot of download and cpu time.
+
+<pre>
+mygb_admin    setup
+mygb_admin -t ftp
+mygb_admin -t parse
+mygb_admin -t build
+mygb_admin -t test
+</pre>
+
+If you plan on doing incremental updates, you should test this too.
+
+<pre>
+mygb_admin -t update
+mygb_admin -t test
+</pre>
+
+<b>mygb_admin commands</b>
+
+<dl>
+
+<dt><em>setup</em><dd><ul><li>creates the directories in $MYGENBANK_DATA if
+necessary<li>copies definitions from $MYGENBANK_CODE/def to
+$MYGENBANK_DATA/Definition<li>creates filenames and divisions files in
+$MYGENBANK_DATA/Definition</ul>
+
+<dt><em>ftp</em><dd><ul><li>reads the filenames from
+$MYGENBANK_DATA/Definitino/filenames<li>skips files already transferred (checks
+for existence in $MYGENBANK_DATA/GenBank)<li>downloads each file, pipes it to
+gunzip, and saves it to $MYGENBANK/_DATA/GenBank</ul>
+
+<dt><em>parse</em><dd><ul><li>reads the filenames from
+$MYGENBANK_DATA/GenBank<li>skips files already parsed (checks for existence in
+$MYGENBANK_DATA/Table)<li>parses each GenBank file<li>creates a corresponding
+fasta file in $MYGENBANK_DATA/Fasta<li>creates a corresponding tab-delimited
+file in $MYGENBANK_DATA/Table</ul>
+
+<dt><em>build</em><dd><ul><li>reads filenames from $MYGENBANK_DATA/Table
+and skips files already loaded into MySQL (checks for existence in
+$MYGENBANK_DATA/Definition)<li>defines the MyGenBank table (see the
+$MYGENBANK_DATA/Definition/MyGenBank.sql file)<li>loads each tab-delimited
+file in $MYGENBANK_DATA/Table</ul>
+
+<dt><em>test</em><dd><ul><li>runs some simple querries on MyGenBank, see the
+section on querrying below</ul>
+
+<dt><em>update</em><dd><ul><li>gets a list of all GenBank update files from
+NCBI<li>ftp (unless already downloaded)<li>parse (unless already
+parsed)<li>build (unless already built)B</ul>
+
+
+</dl>
+
+You may put the commands together on a single line, and the typical command
+line for a test build of MyGenBank would look like this:
+
+<pre>
+mygb_admin -t setup ftp parse build test
+</pre>
+
+If everything works, then you should use the following command line:
+
+<pre>
+mygb_admin setup ftp parse build test >& logfile &
+</pre>
+
+This may take some time, the exact amount will depend on your network,
+cpu, filesystem, and size of GenBank. On my workstation (900 MHz, 512 Mb,
+73Gb 10K SCSI, 400-600 Kb/sec bandwith) with release 120, I was able to
+build MyGenBank in about 6-10 hours depending upon traffic and if I was
+also including the updates.<p>
+
+If the build stops for some reason, like network failure, you can restart it
+again and it won't download files previously fetched (see the command details
+above). You may have to delete the last file created if it has errors. If
+you're logging STDERR as shown above, you should be able to find the file
+without any problems.<p>
+
+If you want to do incremental updates, you can use the following command:
+
+<pre>
+mygb_admin update >& update_log &
+</pre>
+
+
+<!--
+###############################################################################
+-->
+
+<a name=query></a>
+<h2>Querying MyGenBank</h2>
+
+There are two command line tools for interacting with MyGenBank. These are
+explained below.
+
+<h4>mygb_fetch</h4>
+
+mygb_fetch is used for retrieving sequences in raw, Fasta, or GenBank format,
+singly or in batches. You may specify accesion numbers, gi numbers, or query
+strings. The default format is Fasta. For example, to fetch a single specific
+sequence, gi=23456, in fasta format, you would type:
+
+<pre>
+mygb_fetch 23456
+</pre>
+
+You could also retrieve that entry by its accession:
+
+<pre>
+mygb_fetch Z16870
+</pre>
+
+Or with an abbreiviated SQL statement (without the "select ... from ..."
+precedent, and don't forget the inner quotes for strings):
+
+<pre>
+mygb_fetch "gi = 23456"
+mygb_fetch "accession = 'Z16870'"
+</pre>
+
+You can also retrieve multiple sequences by including multiple arguments on the
+command line:
+
+<pre>
+mygb_fetch 23456 45678
+</pre>
+
+You can retrieve a batch of sequences with abbreviated SQL syntax. Here's how
+you build a Fasta database of all the human transcripts:
+
+<pre>
+mygb_fetch "taxid = 9606 and mol_type = 'mRNA'" > human_tx.fasta
+</pre>
+
+You can even mix and match if you like:
+
+<pre>
+mygb_fetch Z16870 45678 "mol_type = 'uRNA'"
+</pre>
+
+Here's how to build fasta database of all human sequences with annotated coding
+sequences that have been deposited in GenBank since March 15th, 2000. Note the
+use of "find_in_set" which is used for querying features and keywords.
+
+<pre>
+mygb_fetch "taxid = 9606 and find_in_set('CDS',features) and date > 2000-03-15"
+</pre>
+
+You can get the sequence in raw format or GenBank flat file format using the -r
+and -g switches (and be explicit about fasta if you like):
+
+<pre>
+mygb_fetch -r 23456
+mygb_fetch -g 23456
+mygb_fetch -f 23456
+</pre>
+
+You may find that the data in MyGenBank is limiting. For example, you might
+want to know who the authors of the sequences are. To do this, you can process
+the flat files as a post-processing step with UNIX shell tools, with the
+GBlite.pm Perl module included in the $MYGENBANK_CODE/lib directory, or with
+other tools, such as those found at <a href=http://bio.perl.org>bioperl</a>.<p>
+
+For archival/publication reasons, you may want to exclude update sequences so
+you can just say "we used Release 120". You can either build without updates or
+use the -u switch in mygb_fetch.
+
+<pre>
+mygb_fetch -u "division = 'EST'"
+</pre>
+
+
+
+<h4>mygb_query</h4>
+
+mygb_query is used for retrieving tab-delimited columns of data from the
+database. To use it, you give it straight SQL. These are the commands issued by
+"mygb_admin test":
+
+<pre>
+"select COUNT(*) from MyGenBank",
+"select accession, mol_type, date, taxid from MyGenBank limit 5",
+"select length, accession from MyGenBank where length < 10 limit 5",
+"select COUNT(*) from MyGenBank where division='BCT'",
+"select COUNT(*) from MyGenBank where find_in_set('HTG', keywords)",
+"select COUNT(*) from MyGenBank where find_in_set('CDS', features)",
+</pre>
+
+</body>
+</html>

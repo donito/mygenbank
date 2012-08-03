@@ -1,0 +1,128 @@
+#!/usr/bin/perl -w
+BEGIN {die "MYGENBANK_DATA undefined\n" unless defined $ENV{MYGENBANK_DATA}}
+use strict;
+use sigtrap;
+use DBI;
+use Getopt::Std;
+# use DataBrowser;
+use vars qw($opt_g $opt_f $opt_r $opt_u $opt_v);
+my $HOME   = $ENV{MYGENBANK_DATA};
+my $DBHOST      = defined $ENV{MYGENBANK_DBHOST} ? $ENV{MYGENBANK_DBHOST} : "db"; # change appropriately
+my $DATABASE    = defined $ENV{MYGENBANK_DB} ? $ENV{MYGENBANK_DB} : "mgb"; # change appropriately
+my $DBUSER      = defined $ENV{MYGENBANK_DBUSER} ? $ENV{MYGENBANK_DBUSER} : "bio"; # change appropriately
+
+my $usage = "
+mygb_fetch - fetch sequences by gi, accession, or query.
+You may give multiple arguments.
+
+usage: mygb_fetch [options] <argument> <...>
+
+argument    example
+  gi        mygb_fetch 23456
+  accession mygb_fetch AF00451
+  query     mygb_fetch \"mol_type = 'RNA' and find_in_set('CDS', features)\"
+options:
+  -f fetch Fasta file   [default]
+  -g fetch GenBank file
+  -r raw sequence
+  -u skip updates, just use the last build's data
+  -v verbose
+";
+
+getopts('fgrevu');
+my $NO_UPDATE  = $opt_u;
+my $VERBOSE    = $opt_v;
+my ($OFFSET, $FIELD, $RAW);
+$OFFSET = 'fasta'; # default
+if ($opt_g) {$OFFSET = "genbank"}
+if ($opt_f) {$OFFSET = "fasta"; $RAW = 0}
+if ($opt_r) {$OFFSET = "fasta"; $RAW = 1}
+die $usage unless @ARGV;
+
+my %Found;
+my $Found; # just a counter
+# my $dbh = DBI->connect('DBI:mysql:test');
+# my $dbh = DBI->connect('DBI:mysql:test:db',"bio");
+my $dbh = DBI->connect("DBI:mysql:$DATABASE:$DBHOST","$DBUSER");
+foreach my $string (@ARGV) {
+	my $FIELD;
+	if    ($string =~ /^\d+$/) {$FIELD = 'gi'}
+	elsif ($string =~ /^\S+$/) {$FIELD = 'accession'}
+	else                       {$FIELD = ''}
+	
+	my $sql;
+	if ($FIELD) {
+		my $version = "";
+		if ($string =~ /^(\w+)\.(\d+)/) {
+			$string  = $1;
+			$version = $2; # currently thrown away
+		}
+		$sql = "select file, $OFFSET from MyGenBank where $FIELD = '$string'";
+ 		$sql .= " and length > 0" unless $opt_g ;
+	}
+	else {
+		$sql = "select file, $OFFSET from MyGenBank where $string";
+#		print "$sql\n";
+	}
+		
+	my $sh = $dbh->prepare($sql);
+	$sh->execute;
+	while(my $data = $sh->fetchrow_hashref) {
+		if (not defined $data) {warn "$string not found\n"}
+		else                   {
+			push @{$Found{$data->{file}}}, $data->{$OFFSET};
+			$Found++;
+		}
+	}
+	$sh->finish;
+}
+$dbh->disconnect;
+
+exit(0) unless %Found;
+
+my $RECORD_END = $OFFSET eq 'fasta' ? ">" : "//";
+my %SEEK; # some record keeping
+foreach my $file (sort keys %Found) {
+	if ($NO_UPDATE) {next if $file =~ /^\d/} # updates are numeric
+	if ($OFFSET eq 'fasta') {
+		open(IN, "$HOME/Fasta/$file.fasta") or
+			die "ERROR $0 fasta not found ($HOME/Fasta/$file.fasta)\n";
+	
+		foreach my $offset (sort {$a <=> $b} @{$Found{$file}}) {
+			$SEEK{$file}++;
+			seek(IN, $offset, 0);
+			my $def = <IN>;
+			print $def unless $RAW;
+			while(<IN>) {
+				last if /^>/;
+				chomp if $RAW;
+				print;
+			}
+			print "\n" if $RAW;
+		}
+		close IN;
+	}
+	else {
+		open(IN, "$HOME/GenBank/$file.seq") or die "ERROR $0 genbank not found\n";
+	
+		#print  ">>>>> opening genbank file $file.seq\n";
+		foreach my $offset (sort {$a <=> $b} @{$Found{$file}}) {
+			$SEEK{$file}++;
+			seek(IN, $offset, 0);
+			while(<IN>) {
+				print;
+				last if /^\/\//;
+			}
+		}
+		close IN;
+	}
+	
+}
+
+if ($VERBOSE) {
+	my $files = keys %SEEK;
+	print STDERR "Fetched $Found entries from $files files\n";
+	foreach my $file (sort keys %SEEK) {
+		print STDERR "$file $SEEK{$file}\n";
+	}
+}
