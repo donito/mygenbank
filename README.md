@@ -1,4 +1,5 @@
-mgb
-===
+MyGenBank
+=========
 
-MyGenBank fork
+MyGenBank as released on 2005.12.01
+
